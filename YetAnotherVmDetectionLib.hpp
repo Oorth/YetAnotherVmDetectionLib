@@ -17,7 +17,6 @@ extern "C" void RunVMwareBackdoor();
 /*
     to implement -
 
-    DISK_SERIAL
     DISPLAY / EDID
     MAC
     MUTEX / OBJECTS
@@ -176,15 +175,15 @@ bool CheckSMBIOS()
     const DWORD signature = 'RSMB';
 
     DWORD size = GetSystemFirmwareTable(signature, 0, nullptr, 0);
-    if (size == 0) return false;
+    if(size == 0) return false;
 
     std::vector<char> buffer(size);
-    if (GetSystemFirmwareTable(signature, 0, buffer.data(), size) != size) return false;
+    if(GetSystemFirmwareTable(signature, 0, buffer.data(), size) != size) return false;
 
     std::string tableData(buffer.begin(), buffer.end());
 
 
-    for (char& c : tableData) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    for(char& c : tableData) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
 
     if(HasSignature(tableData, signatures::HYPERVISORS, sizeof(signatures::HYPERVISORS) / sizeof(char*))) return true;
     if(HasSignature(tableData, signatures::SANDBOXES, sizeof(signatures::SANDBOXES) / sizeof(char*))) return true;
@@ -244,13 +243,65 @@ bool BOOT_LOGO()
     return false;
 }
 
+bool DISK_SERIAL()
+{
+
+    HANDLE hPhysicalDrive = NULL;
+
+    SECURITY_ATTRIBUTES sa = { 0 };
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = FALSE;
+
+    hPhysicalDrive = CreateFileA("\\\\.\\PhysicalDrive0", 0, FILE_SHARE_READ, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+    if(hPhysicalDrive == INVALID_HANDLE_VALUE)
+    {
+        std::cout << "CreateFileA failed error: " << GetLastError() << std::endl;
+        return true;
+    }
+
+    STORAGE_PROPERTY_QUERY PropQuery = {};
+    PropQuery.PropertyId = StorageDeviceProperty;
+    PropQuery.QueryType = PropertyStandardQuery;
+    PropQuery.AdditionalParameters[0] = NULL;
+
+    char buffer[1024] = { 0 };
+    DWORD bytesReturned = 0;
+    if(!DeviceIoControl(hPhysicalDrive, IOCTL_STORAGE_QUERY_PROPERTY, &PropQuery, sizeof(PropQuery), buffer, sizeof(buffer), &bytesReturned, NULL))
+    {
+        CloseHandle(hPhysicalDrive);
+        return false;
+    }
+
+    STORAGE_DEVICE_DESCRIPTOR* pDesc = (STORAGE_DEVICE_DESCRIPTOR*)buffer;
+    
+    if(pDesc->ProductIdOffset > 0)
+    {
+        std::string model = &buffer[pDesc->ProductIdOffset];
+        std::cout << "Disk Model: " << model << std::endl;
+
+        if(HasSignature(model, signatures::HYPERVISORS, sizeof(signatures::HYPERVISORS) / sizeof(char*)))
+        {
+            std::cout << "[!] VM DETECTED via Boot Logo (Table ID): " << model << std::endl;
+            return true;
+        }
+    }
+
+    CloseHandle(hPhysicalDrive);
+    return false;
+}
+
 // ----------------------------Helpers-----------------------------
 
 bool HasSignature(const std::string& input, const char* signatures[], int size)
 {
-    for (int i = 0; i < size; i++)
+
+    std::string lowerInput = input;
+    for(size_t i = 0; i < lowerInput.length(); i++) lowerInput[i] = std::tolower((unsigned char)lowerInput[i]);
+
+    for(int i = 0; i < size; i++)
     {
-        if (input.find(signatures[i]) != std::string::npos)
+        if(lowerInput.find(signatures[i]) != std::string::npos)
         {
             VM::brand = signatures[i];
             return true;

@@ -11,10 +11,13 @@ int main()
 
     //if(CheckSMBIOS()) std::cout << "Hypervisor found CheckSMBIOS\n";
 
-    if(BOOT_LOGO()) std::cout << "Hypervisor found BOOT_LOGO\n";
+    //if(BOOT_LOGO()) std::cout << "Hypervisor found BOOT_LOGO\n";
+
+    if(DISK_SERIAL()) std::cout << "Hypervisor found DISK_SERIAL\n";
+
     
     
-    else std::cout << "Not a VM  :) BOOT_LOGO\n";
+    else std::cout << "Not a VM  :) DISK_SERIAL\n";
 
     return 0;
 }
