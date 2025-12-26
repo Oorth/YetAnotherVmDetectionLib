@@ -1,1 +1,9 @@
+
+x64/
+Debug/
+Release/
 .vs/
+
+
+*.user
+*.suo
