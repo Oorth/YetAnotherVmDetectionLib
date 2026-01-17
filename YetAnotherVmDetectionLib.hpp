@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <Windows.h>
 #include <iostream>
 #include <intrin.h>
@@ -9,9 +9,11 @@ typedef unsigned long DWORD, * PDWORD, * LPDWORD;
 
 
 extern "C" void RunVMwareBackdoor();
+extern "C" uint64_t GetAsmInertia();
 
 #ifdef __INTELLISENSE__
     void RunVMwareBackdoor() {}
+    uint64_t GetAsmInertia() {}
 #endif
 
 /*
@@ -47,13 +49,15 @@ namespace signatures
     static const char* HYPERVISORS[] =
     {
         "vbox",         // Covers: VirtualBox, VBoxHardened, VBoxGuest
+        "innotek",      // old company name for VirtualBox
         "vmware",       // Covers: Workstation, Fusion, ESX, GSX
         "qemu",         // Covers: QEMU, KVM+QEMU
         "kvm",          // Covers: KVM, Amazon EC2 (often), Linux KVM
         "microsoft hv", // Covers: Hyper-V, Azure, Windows Sandbox
         "xen",          // Covers: Xen, AWS (older), Citrix
-        "parallels",    // Covers: Parallels Desktop
-        "virtu"         // GENERIC CATCH-ALL: Virtual PC, VirtualBox, VirtualHD
+        "red hat",      // Covers: KVM/QEMU setups
+        //"virtu",        // GENERIC CATCH-ALL: Virtual PC, VirtualBox, VirtualHD
+        "parallels"     // Covers: Parallels Desktop
     };
 
     // Specific Sandbox / Analysis Tool Signatures
@@ -66,7 +70,9 @@ namespace signatures
         "bochs",        // Bochs Emulator
         "joebox",       // JoeSandbox
         "hybrid",       // Hybrid Analysis
-        "anubis"        // Anubis
+        "anubis",       // Anubis
+        "analysis",
+        "malware"
     };
 
     // Cloud / Enterprise specific
@@ -122,33 +128,107 @@ bool GetHypervisorVendor()
 
 bool CLOCK()
 {
-    const int Threshold = 1000;
-    uint64_t t1, t2, current_cycles = 0;
+
+    const uint64_t HIGH_THRESHOLD = 1000;
+    const uint64_t LOW_THRESHOLD = 50; 
+
+    uint64_t t1, t2;
     uint64_t min_cycles = ~0ULL;
-    
-    // We will not use these
     int data[4];
-    unsigned int aux = 0;
+    unsigned int aux;
 
-
-    // Loop to avoid cpu from switching task
     for(int i = 0; i < 10; ++i)
     {
 
+        _mm_lfence(); 
+
+        
         t1 = __rdtsc();
 
             __cpuid(data, 0);
 
         t2 = __rdtscp(&aux);
 
-        current_cycles = t2 - t1;
-        if(current_cycles < min_cycles) min_cycles = current_cycles;
 
+        _mm_lfence();
+
+        uint64_t current_cycles = t2 - t1;
+        if(current_cycles < min_cycles) min_cycles = current_cycles;
     }
 
-    if(min_cycles > Threshold) return true;
-    else return false;
+    if(min_cycles > HIGH_THRESHOLD || min_cycles < LOW_THRESHOLD) return true;
+
+    return false;
 }
+
+#pragma optimize( "", off )
+
+uint64_t GetSystemInertia()
+{
+    uint64_t t1, t2;
+    uint64_t min_cpuid = ~0ULL;
+    uint64_t min_alu = ~0ULL;
+    int data[4];
+    unsigned int aux;
+
+    // Measure VM Exit (CPUID)
+    for(int i = 0; i < 10; i++)
+    {
+        _mm_lfence();
+        t1 = __rdtsc();
+        
+        __cpuid(data, 0);
+        
+        t2 = __rdtscp(&aux);
+        _mm_lfence();
+        
+        uint64_t diff = t2 - t1;
+        if(diff < min_cpuid) min_cpuid = diff;
+    } //std::cout << "Min __cupid\t : " << min_cpuid << std::endl;
+
+
+    volatile uint64_t random_math = 0;
+    
+    for(int i = 0; i < 10; i++)
+    {
+        _mm_lfence();
+        t1 = __rdtsc();
+        
+        for(int j = 0; j < 25; j++) random_math = (random_math * i) + j;
+        
+        t2 = __rdtscp(&aux);
+        _mm_lfence();
+        
+        uint64_t diff = t2 - t1;
+        if(diff < min_alu) min_alu = diff;
+    } //std::cout << "Min alu\t\t : " << min_alu << std::endl;
+
+    // Prevent divide by zero if the CPU is impossibly fast
+    if(min_alu == 0) min_alu = 1;
+
+    // 3. Return Ratio
+    // Bare Metal: ~200 / ~50 = ~4
+    // VM: ~2000 / ~50 = ~40
+    return min_cpuid / min_alu;
+}
+
+uint64_t CheckEnvironment()
+{
+    uint64_t min_cycles = ~0ULL;
+
+    for (int i = 0; i < 10; i++)
+    {
+        uint64_t cycles = GetAsmInertia();
+        if(cycles < min_cycles) min_cycles = cycles;
+    }
+
+    return min_cycles;
+}
+
+
+#pragma optimize( "", on )
+
+
 
 bool VMWARE_BACKDOOR()
 {
@@ -290,6 +370,40 @@ bool DISK_SERIAL()
     CloseHandle(hPhysicalDrive);
     return false;
 }
+
+//bool EDID()
+//{
+//    HKEY hKey = NULL;
+//    const char* targetPath = "SYSTEM\\CurrentControlSet\\Enum\\DISPLAY";
+//
+//
+//    if(RegOpenKeyExA(HKEY_LOCAL_MACHINE, targetPath, 0, KEY_READ, &hKey) != ERROR_SUCCESS) return false; 
+//
+//    char subKeyName[256] = {};
+//    DWORD index = 0;
+//    DWORD nameLen = 256;
+//
+//    while(RegEnumKeyExA(hKey, index, subKeyName, &nameLen, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+//    {
+//        std::string keyString(subKeyName);
+//
+//        int sigSize = sizeof(signatures::HYPERVISORS) / sizeof(signatures::HYPERVISORS[0]);
+//
+//        if(HasSignature(keyString, signatures::HYPERVISORS, sigSize))
+//        {
+//            std::cout << "[!] VM DETECTED via EDID (Display Key): " << keyString << std::endl;
+//            
+//            RegCloseKey(hKey);
+//            return true;
+//        }
+//
+//        index++; 
+//        nameLen = 256; 
+//    }
+//
+//    RegCloseKey(hKey);
+//    return false;
+//}
 
 // ----------------------------Helpers-----------------------------
 
